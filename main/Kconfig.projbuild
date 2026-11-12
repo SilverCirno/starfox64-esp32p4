@@ -1,0 +1,15 @@
+menu "SF64 virtual controls"
+    config SF64_TOUCH_SWAP_XY
+        bool "Swap touch X/Y axes"
+        default n
+    config SF64_TOUCH_MIRROR_X
+        bool "Mirror touch X axis"
+        default n
+    config SF64_TOUCH_MIRROR_Y
+        bool "Mirror touch Y axis"
+        default n
+endmenu
+
+config SF64_STARSHIP_RUNTIME
+    bool "Execute original Starship game runtime (development)"
+    default n

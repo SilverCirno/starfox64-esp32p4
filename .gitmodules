@@ -1,0 +1,12 @@
+[submodule "third_party/tgx"]
+	path = third_party/tgx
+	url = https://github.com/vindar/tgx.git
+	ignore = dirty
+[submodule "third_party/sf64"]
+	path = third_party/sf64
+	url = https://github.com/sonicdcer/sf64.git
+	ignore = dirty
+[submodule "third_party/starship"]
+	path = third_party/starship
+	url = https://github.com/HarbourMasters/Starship.git
+	ignore = dirty

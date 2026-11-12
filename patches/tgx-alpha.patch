@@ -1,0 +1,149 @@
+diff --git a/src/Renderer3D.h b/src/Renderer3D.h
+index 3c136d4..d6dd4a2 100644
+--- a/src/Renderer3D.h
++++ b/src/Renderer3D.h
+@@ -388,6 +388,22 @@ namespace tgx
+         */
+         void setZbuffer(ZBUFFER_t* zbuffer);
+ 
++        /** SF64 extension: alpha plane has the same stride/dimensions as texture.
++         * Alpha endpoints describe the fragment opacity at texel alpha 0/255.
++         * A null plane samples alpha 255. Fully transparent fragments never
++         * update color or depth. This affects 3D draws only. */
++        void setFragmentAlpha(const uint8_t* plane = nullptr, uint8_t at0 = 255,
++                              uint8_t at255 = 255, uint8_t cutoff = 1) {
++            _uni.texture_alpha=plane; _uni.fragment_alpha0=at0;
++            _uni.fragment_alpha255=at255; _uni.fragment_alpha_cutoff=cutoff;
++        }
++        void setFragmentDepth(bool compare = true, bool write = true) {
++            _uni.depth_compare=compare; _uni.depth_write=write;
++        }
++        void setTextureColorOverride(bool enabled, color_t color = color_t()) {
++            _uni.texture_color_replace=enabled; _uni.texture_constant=color;
++        }
++
+ 
+         /**
+         * Clear the Zbuffer.
+diff --git a/src/ShaderParams.h b/src/ShaderParams.h
+index 7aad3b2..891e01c 100644
+--- a/src/ShaderParams.h
++++ b/src/ShaderParams.h
+@@ -192,6 +192,16 @@ namespace tgx
+         float                       wa;             ///< constants such that f(w) = wa * w + wb maps w (= -1/z) to float(0, 65535) for conversion to uint16_t
+         float                       wb;             ///< constants such that f(w) = wa * w + wb maps w (= -1/z) to float(0, 65535) for conversion to uint16_t
+         const BLEND_OP *            p_blend_op;     ///< pointer to the blending operator to use (only with the 2D shader)        
++        // SF64 port extension: independent alpha plane keeps RGB565 output and
++        // preserves texel coverage. Defaults retain upstream opaque behavior.
++        const uint8_t *             texture_alpha = nullptr;
++        uint8_t                     fragment_alpha0 = 255;
++        uint8_t                     fragment_alpha255 = 255;
++        uint8_t                     fragment_alpha_cutoff = 1;
++        bool                        depth_write = true;
++        bool                        depth_compare = true;
++        bool                        texture_color_replace = false;
++        color_t_im                  texture_constant;
+         };
+ 
+ 
+diff --git a/src/Shaders.h b/src/Shaders.h
+index c47dd8f..cf4ab70 100644
+--- a/src/Shaders.h
++++ b/src/Shaders.h
+@@ -512,6 +512,8 @@ TGX_INLINE inline RGB565 tgx_make_rgb565_from_raw(const int r, const int g, cons
+             while ((bx < lx) && ((C2 | C3) >= 0))
+                 {
+                 bool z_pass = true;
++                ZBUFFER_t current_z{};
++                unsigned texel_alpha=255;
+                 if constexpr (USE_ZBUFFER)
+                     {
+ #if TGX_SHADER_USE_INCREMENTAL_PIXEL_POINTERS
+@@ -519,8 +521,6 @@ TGX_INLINE inline RGB565 tgx_make_rgb565_from_raw(const int r, const int g, cons
+ #else
+                     ZBUFFER_t& W = zbuf[bx];
+ #endif
+-                    ZBUFFER_t current_z;
+-
+                     if constexpr (std::is_same<ZBUFFER_t, uint16_t>::value)
+                         {
+                          current_z = (USE_ORTHO) ? ((ZBUFFER_t)(cw_z * wa + wb)) : ((ZBUFFER_t)cw_z);
+@@ -530,11 +530,7 @@ TGX_INLINE inline RGB565 tgx_make_rgb565_from_raw(const int r, const int g, cons
+                          current_z = (ZBUFFER_t)cw_z;
+                         }
+ 
+-                    if (W < current_z)
+-                        {
+-                        W = current_z;
+-                        }
+-                    else
++                    if (data.depth_compare && !(W < current_z))
+                         {
+                         z_pass = false;
+                         }
+@@ -559,6 +555,28 @@ TGX_INLINE inline RGB565 tgx_make_rgb565_from_raw(const int r, const int g, cons
+                             yy = ty;
+                             }
+ 
++                        if (data.texture_alpha)
++                            {
++                            if constexpr (TEXTURE_BILINEAR)
++                                {
++                                const int x0=lfloorf(xx), y0=lfloorf(yy);
++                                const float ax=xx-x0, ay=yy-y0;
++                                const int u0=TEXTURE_WRAP ? (x0&texsize_x_mm) : shaderclip(x0,texsize_x_mm);
++                                const int u1=TEXTURE_WRAP ? ((x0+1)&texsize_x_mm) : shaderclip(x0+1,texsize_x_mm);
++                                const int v0=(TEXTURE_WRAP ? (y0&texsize_y_mm) : shaderclip(y0,texsize_y_mm))*texstride;
++                                const int v1=(TEXTURE_WRAP ? ((y0+1)&texsize_y_mm) : shaderclip(y0+1,texsize_y_mm))*texstride;
++                                const auto* plane=data.texture_alpha;
++                                texel_alpha=(unsigned)((1-ay)*((1-ax)*plane[u0+v0]+ax*plane[u1+v0])+
++                                    ay*((1-ax)*plane[u0+v1]+ax*plane[u1+v1])+0.5f);
++                                }
++                            else
++                                {
++                                const int u=TEXTURE_WRAP ? ((int)xx&texsize_x_mm) : shaderclip((int)xx,texsize_x_mm);
++                                const int v=TEXTURE_WRAP ? ((int)yy&texsize_y_mm) : shaderclip((int)yy,texsize_y_mm);
++                                texel_alpha=data.texture_alpha[u+v*texstride];
++                                }
++                            }
++
+                         int modR = 256;
+                         int modG = 256;
+                         int modB = 256;
+@@ -724,11 +742,34 @@ TGX_INLINE inline RGB565 tgx_make_rgb565_from_raw(const int r, const int g, cons
+                             }
+                         }
+ 
++                    if constexpr (USE_TEXTURE)
++                        {
++                        if(data.texture_color_replace) final_color=data.texture_constant;
++                        }
++                    const unsigned alpha=(data.fragment_alpha0*(255-texel_alpha)+
++                        data.fragment_alpha255*texel_alpha+127)/255;
++                    if(alpha && alpha>=data.fragment_alpha_cutoff)
++                        {
+ #if TGX_SHADER_USE_INCREMENTAL_PIXEL_POINTERS
+-                    *pix = final_color;
++                        color_t& destination=*pix;
+ #else
+-                    buf[bx] = final_color;
++                        color_t& destination=buf[bx];
+ #endif
++                        if(alpha==255) destination=final_color;
++                        else destination.blend256(final_color,(alpha*256+127)/255);
++                        // Defer the depth write until coverage/alpha passes.
++                        if constexpr (USE_ZBUFFER)
++                            {
++                            if(data.depth_write)
++                                {
++#if TGX_SHADER_USE_INCREMENTAL_PIXEL_POINTERS
++                                *zpix=current_z;
++#else
++                                zbuf[bx]=current_z;
++#endif
++                                }
++                            }
++                        }
+                     }
+ 
+                 // --- Increment for next pixel ---

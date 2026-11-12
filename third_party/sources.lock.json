@@ -1,0 +1,27 @@
+{
+  "tgx": {
+    "url": "https://github.com/vindar/tgx.git",
+    "commit": "d43f88906ab87f877ea249af2232896b097f15a7",
+    "role": "ESP-IDF software renderer with a local alpha-plane extension",
+    "license": "LGPL-2.1-or-later",
+    "patch": "patches/tgx-alpha.patch"
+  },
+  "sf64": {
+    "url": "https://github.com/sonicdcer/sf64.git",
+    "commit": "4235c59f00b04440e3fd5fec49f0bc80e48cf212",
+    "role": "Reference N64 platform headers and optional compile audit",
+    "license": "see upstream LICENSE and individual files"
+  },
+  "starship": {
+    "url": "https://github.com/HarbourMasters/Starship.git",
+    "commit": "3322643f0bbf80d2f8f7e1c0d2c4c578515f6c90",
+    "role": "Native C game core compiled for ESP32-P4 RISC-V",
+    "license": "see upstream LICENSE.md and individual files"
+  },
+  "libultraship": {
+    "url": "https://github.com/Kenix3/libultraship.git",
+    "commit": "eaaf9d0fc91e2c400f49ef2a1f8547a691ce4d3c",
+    "role": "Pinned Starship ABI headers; desktop backend is not linked",
+    "license": "see upstream license and individual files"
+  }
+}

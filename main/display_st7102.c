@@ -1,0 +1,149 @@
+/*
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: CC0-1.0
+ */
+
+#include "display_st7102.h"
+#include "esp_log.h"
+
+
+
+#include "esp_ldo_regulator.h"
+#include "esp_lcd_mipi_dsi.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_st7102.h"
+#include "driver/gpio.h"
+
+static const char *TAG = "hw_lcd_init";
+
+#define HW_LDO_MIPI_CHAN                        (3)
+#define HW_LDO_MIPI_VOLTAGE_MV                  (2500)
+#define HW_LCD_BIT_PER_PIXEL                    (16)
+#define HW_MIPI_DPI_PX_FORMAT                   (LCD_COLOR_PIXEL_FORMAT_RGB565)
+#define HW_PIN_NUM_LCD_RST                      (-1)
+
+static esp_lcd_dsi_bus_handle_t s_mipi_dsi_bus;
+static esp_lcd_panel_io_handle_t s_mipi_dbi_io;
+static esp_lcd_panel_handle_t s_panel_handle;
+
+static const st7102_lcd_init_cmd_t lcd_init_cmds[] = {
+//  {cmd, { data }, data_size, delay_ms}
+    {0x99, (uint8_t []){0x71,0x02,0xa2}, 3, 0},
+    {0x99, (uint8_t []){0x71,0x02,0xa3}, 3, 0},
+    {0x99, (uint8_t []){0x71,0x02,0xa4}, 3, 0},
+    {0xB0, (uint8_t []){0x22,0x61,0x1E,0x61,0x2F,0x39,0x39}, 7, 0},
+    {0xB7, (uint8_t []){0x46,0x46}, 2, 0},
+    {0xBF, (uint8_t []){0x50,0x50}, 2, 0},
+    {0xD7, (uint8_t []){0x00,0x0C,0x80,0x08,0xF0,0xF0}, 6, 0},
+    {0xA3, (uint8_t []){0x40,0x03,0x80,0x00,0x44,0x00,0x00,0x00,0x00,0x04,
+                        0x6F,0x6F,0x00,0x1A,0x00,0x45,0x05,0x00,0x00,0x00,
+                        0x00,0x46,0x00,0x00,0x12,0x20,0x52,0x00,0x05,0x00,
+                        0x00,0xFF}, 32, 0},
+    {0xA6, (uint8_t []){0x08,0x00,0x24,0x55,0x35,0x00,0x76,0x40,0x58,0x58,
+                        0x00,0x24,0x55,0x00,0x00,0x40,0x40,0x58,0x58,0x02,
+                        0xAC,0x51,0x00,0xCC,0x40,0x40,0x58,0x58,0x00,0xAC,
+                        0x11,0x00,0x00,0x40,0x40,0x58,0x58,0x00,0x00,0x06,
+                        0x00,0x00,0x00,0x00}, 44, 0},
+    {0xA7, (uint8_t []){0x19,0x19,0x00,0x64,0x40,0x07,0x16,0x40,0x00,0x44,
+                        0x43,0x58,0x58,0x00,0x64,0x40,0x25,0x34,0x00,0x00,
+                        0x42,0x41,0x58,0x58,0x00,0x64,0x40,0x4B,0x5A,0x00,
+                        0x00,0x42,0x41,0x58,0x58,0x00,0x24,0x40,0x69,0x78,
+                        0x00,0x00,0x40,0x40,0x58,0x58,0x00,0x44}, 48, 0},
+    {0xAC, (uint8_t []){0x00,0x1C,0x04,0x1A,0x19,0x1B,0x1B,0x18,0x06,0x13,
+                        0x19,0x11,0x1B,0x08,0x18,0x0A,0x01,0x1C,0x04,0x1A,
+                        0x19,0x01,0x1B,0x18,0x06,0x12,0x19,0x10,0x1B,0x09,
+                        0x18,0x0B,0xBF,0xAA,0xBF,0xAA,0x00}, 37, 0},
+    {0xAD, (uint8_t []){0xCC,0x40,0x46,0x11,0x04,0x6F,0x6F}, 7, 0},
+    {0xE8, (uint8_t []){0x30,0x07,0x05,0x74,0x74,0x9C,0x00,0xE2,0x04,0x00,
+                        0x00,0x00,0x00,0xEF}, 14, 0},
+    {0x75, (uint8_t []){0x03,0x04}, 2, 0},
+    {0xE7, (uint8_t []){0x8B,0x3C,0x00,0x0C,0xF0,0x5D,0x00,0x5D,0x00,0x5D,
+                        0x00,0x5D,0x00,0xFF,0x00,0x08,0x7B,0x00,0x00,0xC8,
+                        0x6A,0x5A,0x08,0x1A,0x3C,0x00,0xA1,0x01,0x8C,0x01,
+                        0x7F,0xF0,0x22}, 33, 0},
+    {0xE9, (uint8_t []){0x3C,0x7F,0x08,0x07,0x1A,0x7A,0x22,0x1A,0x33}, 9, 0},
+    {0xC8, (uint8_t []){0x00,0x00,0x15,0x26,0x44,0x00,0x78,0x03,0xBE,0x06,
+                        0x11,0x1C,0x09,0x8A,0x03,0x21,0xD4,0x01,0x11,0x0F,
+                        0x22,0x4A,0x0F,0x8F,0x0A,0x32,0xF0,0x0A,0x41,0x0D,
+                        0xF3,0x80,0x0D,0xAE,0xC5,0x03,0xC4}, 37, 0},
+    {0xC9, (uint8_t []){0x00,0x00,0x15,0x26,0x44,0x00,0x78,0x03,0xBE,0x06,
+                        0x11,0x1C,0x09,0x8A,0x03,0x21,0xD4,0x01,0x11,0x0F,
+                        0x22,0x4A,0x0F,0x8F,0x0A,0x32,0xF0,0x0A,0x41,0x0D,
+                        0xF3,0x80,0x0D,0xAE,0xC5,0x03,0xC4}, 37, 0},
+    {0x11, (uint8_t []){0x00}, 0, 120},
+    {0x29, (uint8_t []){0x00}, 0, 20},
+};
+
+static void lcd_ldo_power_on(void)
+{
+    esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
+    esp_ldo_channel_config_t ldo_mipi_phy_config = {
+        .chan_id = HW_LDO_MIPI_CHAN,
+        .voltage_mv = HW_LDO_MIPI_VOLTAGE_MV,
+    };
+    ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
+}
+
+esp_err_t sf64_display_init(esp_lcd_panel_handle_t *panel_handle)
+{
+    lcd_ldo_power_on();
+
+    ESP_LOGD(TAG, "Install LCD driver");
+    esp_lcd_dsi_bus_config_t bus_config = {                    \
+        .bus_id = 0,                                           \
+        .num_data_lanes = 2,                                   \
+        .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,           \
+        .lane_bit_rate_mbps = 620,                             \
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &s_mipi_dsi_bus));
+
+    ESP_LOGI(TAG, "Install panel IO");
+    esp_lcd_dbi_io_config_t dbi_config = ST7102_MIPI_PANEL_IO_DBI_CONFIG();
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_dbi(s_mipi_dsi_bus, &dbi_config, &s_mipi_dbi_io));
+
+    ESP_LOGI(TAG, "Install LCD driver of st7102");
+    esp_lcd_dpi_panel_config_t dpi_config = {                 \
+        .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,          \
+        .dpi_clock_freq_mhz = 30,                             \
+        .virtual_channel = 0,                                 \
+        .pixel_format = HW_MIPI_DPI_PX_FORMAT,                \
+        .num_fbs = 1,                                         \
+        .video_timing = {                                     \
+            .h_size = 480,                                    \
+            .v_size = 480,                                    \
+            .hsync_back_porch = 140,                          \
+            .hsync_pulse_width = 2,                           \
+            .hsync_front_porch = 120,                         \
+            .vsync_back_porch = 8,                            \
+            .vsync_pulse_width = 4,                           \
+            .vsync_front_porch = 200,                         \
+        },                                                    \
+        .flags.use_dma2d = true,                              \
+    };
+    dpi_config.num_fbs = 2;
+    st7102_vendor_config_t vendor_config = {
+        .init_cmds = lcd_init_cmds,      // Uncomment these line if use custom initialization commands
+        .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(st7102_lcd_init_cmd_t),
+        .flags.use_mipi_interface = 1,
+        .mipi_config = {
+            .dsi_bus = s_mipi_dsi_bus,
+            .dpi_config = &dpi_config,
+        },
+    };
+    const esp_lcd_panel_dev_config_t panel_config = {
+        .reset_gpio_num = HW_PIN_NUM_LCD_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = HW_LCD_BIT_PER_PIXEL,
+        .vendor_config = &vendor_config,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7102(s_mipi_dbi_io, &panel_config, &s_panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel_handle));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel_handle));
+
+    *panel_handle = s_panel_handle;
+
+
+    return ESP_OK;
+}
+

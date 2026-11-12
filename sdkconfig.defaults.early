@@ -1,0 +1,2 @@
+# Same silicon family as the supplied LCD demo (ESP32-P4 before revision 3).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
